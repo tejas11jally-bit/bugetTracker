@@ -1,0 +1,300 @@
+// Ledgerly data model. See PRD.md "Data model".
+// Amounts are integers in minor units of their currency. amountBase is AED fils.
+// Dates without a time (transaction date, due dates) are "YYYY-MM-DD" strings in the user's time zone.
+
+generator client {
+  provider      = "prisma-client-js"
+  // Docker image is Alpine (musl) on amd64 or arm64 (Apple Silicon, Raspberry Pi).
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 Int      @id @default(autoincrement())
+  email              String   @unique
+  name               String
+  passwordHash       String   @map("password_hash")
+  baseCurrency       String   @default("AED") @map("base_currency")
+  timezone           String   @default("Asia/Dubai")
+  quietHoursStart    String   @default("23:00") @map("quiet_hours_start")
+  quietHoursEnd      String   @default("08:00") @map("quiet_hours_end")
+  streakCount        Int      @default(0) @map("streak_count")
+  lastLogDate        String?  @map("last_log_date")
+  // Additions beyond the PRD table (see PROGRESS.md):
+  weekStart          Int      @default(1) @map("week_start") // 1 = Monday, 0 = Sunday
+  theme              String   @default("system") // light, dark, system
+  accent             String   @default("#0f766e")
+  pushShowAmounts    Boolean  @default(false) @map("push_show_amounts")
+  maxPushesPerDay    Int      @default(3) @map("max_pushes_per_day")
+  lastAccountId      Int?     @map("last_account_id")
+  forecastThreshold  Int      @default(0) @map("forecast_threshold") // AED fils
+  appInstalledAt     DateTime? @map("app_installed_at")
+  checklistDismissed Boolean  @default(false) @map("checklist_dismissed")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Account {
+  id                Int       @id @default(autoincrement())
+  name              String
+  type              String // cash, debit, credit, savings
+  currency          String    @default("AED")
+  openingBalance    Int       @default(0) @map("opening_balance") // credit: negative = owed
+  statementDay      Int?      @map("statement_day")
+  dueDay            Int?      @map("due_day")
+  archived          Boolean   @default(false)
+  reconciledAt      DateTime? @map("reconciled_at")
+  reconciledBalance Int?      @map("reconciled_balance")
+  reconcileGapBp    Int?      @map("reconcile_gap_bp") // gap at last reconcile, basis points of balance
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  transactions      Transaction[]    @relation("account")
+  transfersIn       Transaction[]    @relation("transferAccount")
+  recurringItems    RecurringItem[]
+  goals             Goal[]
+
+  @@map("accounts")
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String
+  group     String // Essentials, Lifestyle, Savings, Income
+  icon      String   @default("•")
+  colour    String   @default("#64748b")
+  sortOrder Int      @default(0) @map("sort_order")
+  archived  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  transactions   Transaction[]
+  budgets        Budget[]
+  recurringItems RecurringItem[]
+  merchantRules  MerchantRule[]
+
+  @@map("categories")
+}
+
+model Transaction {
+  id                Int      @id @default(autoincrement())
+  accountId         Int      @map("account_id")
+  categoryId        Int?     @map("category_id")
+  date              String // YYYY-MM-DD
+  currency          String
+  amountOriginal    Int      @map("amount_original") // negative = money out of accountId
+  fxRate            Float    @map("fx_rate") // AED per 1 unit of currency
+  amountBase        Int      @map("amount_base") // AED fils
+  payee             String   @default("")
+  note              String   @default("")
+  tags              String   @default("") // comma separated
+  type              String // expense, income, transfer
+  transferAccountId Int?     @map("transfer_account_id")
+  transferAmount    Int?     @map("transfer_amount") // positive, minor units of the destination account currency
+  source            String   @default("manual") // manual, apple_pay, quick_log, recurring, import
+  status            String   @default("confirmed") // confirmed, review
+  cardLabel         String?  @map("card_label")
+  receiptPath       String?  @map("receipt_path")
+  parentId          Int?     @map("parent_id")
+  split             Boolean  @default(false) // true on a split parent; children carry the categories
+  recurringItemId   Int?     @map("recurring_item_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  account         Account       @relation("account", fields: [accountId], references: [id])
+  transferAccount Account?      @relation("transferAccount", fields: [transferAccountId], references: [id])
+  category        Category?     @relation(fields: [categoryId], references: [id])
+  parent          Transaction?  @relation("split", fields: [parentId], references: [id], onDelete: Cascade)
+  children        Transaction[] @relation("split")
+
+  @@index([date])
+  @@index([accountId])
+  @@index([categoryId])
+  @@index([status])
+  @@map("transactions")
+}
+
+model Budget {
+  id             Int      @id @default(autoincrement())
+  categoryId     Int      @map("category_id")
+  month          String // YYYY-MM
+  assignedAmount Int      @default(0) @map("assigned_amount") // AED fils
+  rolloverMode   String   @default("carry") @map("rollover_mode") // carry, reset
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  category Category @relation(fields: [categoryId], references: [id])
+
+  @@unique([categoryId, month])
+  @@map("budgets")
+}
+
+model RecurringItem {
+  id          Int      @id @default(autoincrement())
+  name        String
+  amount      Int // minor units; negative = bill, positive = income
+  currency    String   @default("AED")
+  accountId   Int      @map("account_id")
+  categoryId  Int?     @map("category_id")
+  cadence     String // weekly, fortnightly, monthly, quarterly, yearly, custom
+  interval    Int      @default(1) // custom: every N days
+  nextDueDate String   @map("next_due_date")
+  autoPost    Boolean  @default(false) @map("auto_post")
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  account  Account   @relation(fields: [accountId], references: [id])
+  category Category? @relation(fields: [categoryId], references: [id])
+
+  @@map("recurring_items")
+}
+
+model Goal {
+  id              Int      @id @default(autoincrement())
+  name            String
+  templateKey     String   @default("custom") @map("template_key")
+  targetAmount    Int      @map("target_amount") // AED fils
+  targetDate      String?  @map("target_date")
+  linkedAccountId Int?     @map("linked_account_id")
+  savedAmount     Int      @default(0) @map("saved_amount") // AED fils, used when no linked account
+  archived        Boolean  @default(false)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  linkedAccount Account? @relation(fields: [linkedAccountId], references: [id])
+
+  @@map("goals")
+}
+
+model Reminder {
+  id         Int       @id @default(autoincrement())
+  type       String    @unique // daily_log, midday, bill_due, weekly_review, month_close, inactivity
+  schedule   String // JSON, see src/lib/reminders.ts
+  enabled    Boolean   @default(true)
+  channel    String    @default("push")
+  lastSentAt DateTime? @map("last_sent_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@map("reminders")
+}
+
+model PushSubscription {
+  id            Int       @id @default(autoincrement())
+  deviceLabel   String    @map("device_label")
+  endpoint      String    @unique
+  keys          String // JSON {p256dh, auth}
+  lastSuccessAt DateTime? @map("last_success_at")
+  lastError     String?   @map("last_error")
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("push_subscriptions")
+}
+
+model Checkin {
+  id        Int      @id @default(autoincrement())
+  date      String   @unique
+  type      String // logged, nothing_today
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("checkins")
+}
+
+model FxRate {
+  date      String
+  currency  String
+  rateToAed Float    @map("rate_to_aed")
+  source    String   @default("auto") // auto, manual
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@id([date, currency])
+  @@map("fx_rates")
+}
+
+model MerchantRule {
+  id         Int      @id @default(autoincrement())
+  matchText  String   @unique @map("match_text")
+  categoryId Int      @map("category_id")
+  hitCount   Int      @default(0) @map("hit_count")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@map("merchant_rules")
+}
+
+model ApiToken {
+  id         Int       @id @default(autoincrement())
+  label      String
+  tokenHash  String    @unique @map("token_hash")
+  lastUsedAt DateTime? @map("last_used_at")
+  revoked    Boolean   @default(false)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@map("api_tokens")
+}
+
+// ---- Additions beyond the PRD table (see PROGRESS.md) ----
+
+model Passkey {
+  id           Int       @id @default(autoincrement())
+  credentialId String    @unique @map("credential_id")
+  publicKey    Bytes     @map("public_key")
+  counter      Int       @default(0)
+  transports   String    @default("")
+  label        String    @default("Passkey")
+  lastUsedAt   DateTime? @map("last_used_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("passkeys")
+}
+
+model Alert {
+  id        Int      @id @default(autoincrement())
+  type      String // over_budget, budget_80, bill_tomorrow, large_tx, milestone
+  message   String
+  link      String   @default("/")
+  dedupeKey String   @unique @map("dedupe_key")
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("alerts")
+}
+
+model AppState {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_state")
+}
+
+model PushLog {
+  id        Int      @id @default(autoincrement())
+  date      String // local YYYY-MM-DD, for the daily cap
+  kind      String
+  title     String
+  delivered Int      @default(0)
+  failed    Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([date])
+  @@map("push_log")
+}

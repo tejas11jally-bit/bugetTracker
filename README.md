@@ -99,14 +99,47 @@ tailscale serve status             # shows https://ledgerly.<tailnet>.ts.net →
 1. Install **Tailscale** from the App Store and sign in with the same account.
 2. In the Tailscale app → Settings → **VPN On Demand** → turn it on, so the phone stays connected away from home.
 
-## Phase 0 test
+## 6. First run
 
-1. On the iPhone, turn **Wi-Fi off** (mobile data only).
-2. Open Safari and go to `https://ledgerly.<your-tailnet>.ts.net`.
-3. Pass when all three hold:
-   - Safari shows the lock icon with no certificate warning.
-   - **Host** on the page ends in `.ts.net` and **Protocol** shows `https`.
-   - **Secure context** shows **Yes**.
+1. On the iPhone (Tailscale connected), open `https://ledgerly.<your-tailnet>.ts.net` in **Safari**.
+2. Create your account: name, email, password, starter categories, and your accounts with today's balances (credit cards: amount owed).
+3. Follow **Set up your phone**: Share → Add to Home Screen → open Ledgerly from the icon → **Enable reminders** (iOS only allows this from the Home Screen app, after a tap).
+4. Log something: tap **+**, type `32 @coffee`, press return.
+5. Optional: Settings → **Shortcuts & tokens** for Apple Pay capture and the Quick Log shortcut (step-by-step instructions are in the app).
+6. Optional: Settings → **Sign-in** → **Add Face ID / passkey**.
+
+Quick add grammar: `45 @groceries Carrefour`, `20 USD @coffee`, `+15000 @salary`, `12 @lunch #work`, `300 !cash @groceries`, `… note: anything`.
+
+## Acceptance tests (PRD "Done when")
+
+The PRD's per-phase gates were run together at the end at the owner's request. Check each one on your own setup:
+
+| Phase | Test | Pass when |
+| --- | --- | --- |
+| 0 | iPhone on mobile data (Wi-Fi off) opens the ts.net address | Lock icon, no certificate warning |
+| 1 | Install from Home Screen, log 10 real purchases | Each takes under 10 seconds |
+| 2 | Leave reminders on for 7 nights, phone locked | A 21:00 push arrives each night; Settings → Reminders shows the delivery log |
+| 2 | Pay with Apple Pay | Purchase appears in Review within 10 seconds |
+| 3 | Make one purchase in a foreign currency, then compare Left to Budget with the breakdown on the Budget screen | Left to Budget = from last month + income − assigned − uncategorised |
+| 4 | After a month, reconcile every account | Gap under 2% on each (Accounts shows the gap) |
+| 5 | Receipt photo, 90-day forecast, dark mode and accent colour | Your sign-off |
+
+## Backups and restore
+
+- **Nightly:** at 03:00 the database is copied to `./backups/ledgerly-YYYY-MM-DD.db`; 30 days are kept. Settings → Import, export & backup has **Back up now** and download links.
+- **Full export:** Settings → Import, export & backup → *Full backup (JSON)* and *Transactions (CSV)*.
+- **Also keep a copy of `./data/secrets.json`.** It holds the push (VAPID) keys and the login signing key. Without it, phones must re-enable reminders and you sign in again.
+
+Restore from a nightly backup:
+
+```sh
+docker compose down
+cp backups/ledgerly-2026-10-20.db data/ledgerly.db
+rm -f data/ledgerly.db-wal data/ledgerly.db-shm
+docker compose up -d
+```
+
+Restore from a JSON export: Settings → Import, export & backup → Restore (type RESTORE). A database snapshot is saved to `./backups` first.
 
 ## Troubleshooting
 
@@ -115,13 +148,20 @@ tailscale serve status             # shows https://ledgerly.<tailnet>.ts.net →
 | Safari "cannot connect" | Tailscale on the iPhone is off, or the home machine is asleep. Run `tailscale status` on both. |
 | Certificate warning | HTTPS Certificates is not enabled (step 2), or you opened the raw `100.x.y.z` IP instead of the `.ts.net` name. |
 | `502` from the ts.net address | The container is down. Run `docker compose ps` and `docker compose logs ledgerly`. |
+| No reminders | Dashboard → Server health must say Online. Settings → Reminders → Send test notification. If the device shows Inactive, open Ledgerly on that phone and tap Re-enable. |
+| Apple Pay shortcut says 401 | The token was revoked or mistyped. Create a new one in Settings → Shortcuts & tokens. |
+| Forgot password | `docker compose exec ledgerly node scripts/reset-password.mjs 'new password'` (also removes passkeys; add Face ID again after). |
 | Address shows a different machine name | Rename the machine (step 2.4), then run `tailscale serve --bg 3000` again. |
 
 ## Development
 
 ```sh
 npm install
-npm run dev     # http://localhost:3000
+npm run dev        # applies migrations, then http://localhost:3000 (data in ./data)
+npm test           # parser, budget and scheduler tests, each on a throwaway database
+npm run typecheck
 npm run lint
 npm run build
 ```
+
+Layout: `src/lib` holds the logic (ledger, budget, reminders, push, fx, reports), `src/app/(app)` the signed-in screens, `src/app/api` the JSON endpoints (`/api/ingest` for Shortcuts), `prisma/` the schema and migrations. Set `LEDGERLY_SCHEDULER=off` to run without the reminder scheduler.

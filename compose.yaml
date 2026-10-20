@@ -11,8 +11,8 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./data:/app/data # SQLite file (Phase 1)
-      - ./backups:/app/backups # nightly backups (Phase 1)
+      - ./data:/app/data # SQLite database, receipts, generated keys
+      - ./backups:/app/backups # nightly database copies, kept 30 days
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s
