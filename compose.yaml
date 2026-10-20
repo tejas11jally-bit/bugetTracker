@@ -1,0 +1,21 @@
+services:
+  ledgerly:
+    build: .
+    image: ledgerly:latest
+    container_name: ledgerly
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Dubai
+    # Bound to localhost only. Not reachable from the LAN or internet;
+    # `tailscale serve` on the host is the only way in.
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/app/data # SQLite file (Phase 1)
+      - ./backups:/app/backups # nightly backups (Phase 1)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
